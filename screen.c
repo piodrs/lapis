@@ -6,6 +6,7 @@
 #include "screen.h"
 
 #define KEY_CTRL(key) ((key)&0x1f)
+#define KEY_DEL 0x7f
 
 const char *screen_run(void)
 {
@@ -47,12 +48,31 @@ const char *screen_run(void)
 				if (col < len && col < cols - 1)
 					++col;
 				break;
+			case KEY_BACKSPACE:
+			case KEY_DEL:
+			case KEY_CTRL('h'):
+				if (col > 0) {
+					memmove(line + col - 1, line + col,
+						len - col + 1);
+					--len;
+					--col;
+				}
+				break;
+			case KEY_DC:
+				if (col < len) {
+					memmove(line + col, line + col + 1,
+						len - col);
+					--len;
+				}
+				break;
 			default:
 				if (ch < ' ' || ch > '~' || len >= cols - 1)
 					break;
 				if (len + 1 >= cap) {
-					size = cap == 0 ? cols :
-						(cap > cols / 2 ? cols : cap * 2);
+					size = cap == 0 ? cols
+							: (cap > cols / 2
+								   ? cols
+								   : cap * 2);
 					next = realloc(line, size);
 					if (next == NULL) {
 						error = "cannot allocate line";
