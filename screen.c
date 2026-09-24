@@ -1,99 +1,107 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <curses.h>
 
+#include "defs.h"
+#include "editor.h"
 #include "screen.h"
 
-#define KEY_CTRL(key) ((key)&0x1f)
-#define KEY_DEL 0x7f
+int screen_input(Editor *ed, int ch)
+{
+	switch (ch) {
+	case KEY_LEFT:
+		if (ed->col > 0)
+			--ed->col;
+		else if (ed->row > 0)
+			ed->col = ed->rows[--ed->row].len;
+		break;
+	case KEY_RIGHT:
+		if (ed->col < ed->rows[ed->row].len)
+			++ed->col;
+		else if (ed->row + 1 < ed->len) {
+			++ed->row;
+			ed->col = 0;
+		}
+		break;
+	case KEY_UP:
+		if (ed->row > 0)
+			--ed->row;
+		break;
+	case KEY_DOWN:
+		if (ed->row + 1 < ed->len)
+			++ed->row;
+		break;
+	case KEY_BACKSPACE:
+	case KEY_DEL:
+	case KEY_CTRL('h'):
+		return editor_backspace(ed);
+	case KEY_DC:
+		return editor_delete(ed);
+	case '\r':
+	case '\n':
+	case KEY_ENTER:
+		return editor_split(ed);
+	default:
+		if (ch >= ' ' && ch <= '~')
+			return editor_insert(ed, ch);
+		break;
+	}
+	if (ed->col > ed->rows[ed->row].len)
+		ed->col = ed->rows[ed->row].len;
+	return 0;
+}
+
+int screen_draw(const Editor *ed)
+{
+	int rows;
+	int cols;
+	int row;
+	int col;
+	int i;
+
+	getmaxyx(stdscr, rows, cols);
+	if (erase() == ERR)
+		return 1;
+	for (i = 0; i < rows && (size_t)i < ed->len; ++i) {
+		if (mvaddnstr(i, 0, ed->rows[i].text, cols - 1) == ERR)
+			return 1;
+	}
+	row = ed->row < (size_t)rows ? (int)ed->row : rows - 1;
+	col = ed->col < (size_t)cols ? (int)ed->col : cols - 1;
+	return move(row, col) == ERR || refresh() == ERR;
+}
 
 const char *screen_run(void)
 {
 	SCREEN *screen;
+	Editor ed;
 	const char *error;
-	char *line;
-	char *next;
 	int ch;
-	int col;
-	int cols;
-	int len;
-	int cap;
-	int size;
 
+	if (editor_init(&ed))
+		return "cannot allocate editor";
 	screen = newterm(NULL, stdout, stdin);
-	if (screen == NULL)
+	if (screen == NULL) {
+		editor_free(&ed);
 		return "cannot initialize terminal";
+	}
 	error = NULL;
-	line = NULL;
-	len = 0;
-	cap = 0;
-	col = 0;
-	if (raw() == ERR || noecho() == ERR || keypad(stdscr, TRUE) == ERR ||
-	    erase() == ERR || refresh() == ERR) {
+	if (raw() == ERR || noecho() == ERR || keypad(stdscr, TRUE) == ERR) {
 		error = "cannot configure terminal";
 	} else {
-		while ((ch = getch()) != KEY_CTRL('q')) {
+		for (;;) {
+			if (screen_draw(&ed)) {
+				error = "cannot draw editor";
+				break;
+			}
+			ch = getch();
+			if (ch == KEY_CTRL('q'))
+				break;
 			if (ch == ERR) {
 				error = "cannot read input";
 				break;
 			}
-			cols = getmaxx(stdscr);
-			switch (ch) {
-			case KEY_LEFT:
-				if (col > 0)
-					--col;
-				break;
-			case KEY_RIGHT:
-				if (col < len && col < cols - 1)
-					++col;
-				break;
-			case KEY_BACKSPACE:
-			case KEY_DEL:
-			case KEY_CTRL('h'):
-				if (col > 0) {
-					memmove(line + col - 1, line + col,
-						len - col + 1);
-					--len;
-					--col;
-				}
-				break;
-			case KEY_DC:
-				if (col < len) {
-					memmove(line + col, line + col + 1,
-						len - col);
-					--len;
-				}
-				break;
-			default:
-				if (ch < ' ' || ch > '~' || len >= cols - 1)
-					break;
-				if (len + 1 >= cap) {
-					size = cap == 0 ? cols
-							: (cap > cols / 2
-								   ? cols
-								   : cap * 2);
-					next = realloc(line, size);
-					if (next == NULL) {
-						error = "cannot allocate line";
-						break;
-					}
-					line = next;
-					cap = size;
-				}
-				memmove(line + col + 1, line + col, len - col);
-				line[col++] = ch;
-				line[++len] = '\0';
-				break;
-			}
-			if (error != NULL)
-				break;
-			if (col >= cols)
-				col = cols - 1;
-			if (erase() == ERR ||
-			    (len > 0 && addnstr(line, cols - 1) == ERR) ||
-			    move(0, col) == ERR || refresh() == ERR) {
-				error = "cannot draw line";
+			if (screen_input(&ed, ch)) {
+				error = "cannot grow text";
 				break;
 			}
 		}
@@ -101,6 +109,6 @@ const char *screen_run(void)
 	if (endwin() == ERR)
 		error = "cannot restore terminal";
 	delscreen(screen);
-	free(line);
+	editor_free(&ed);
 	return error;
 }
