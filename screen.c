@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <curses.h>
 
 #include "screen.h"
@@ -9,17 +11,22 @@ const char *screen_run(void)
 {
 	SCREEN *screen;
 	const char *error;
+	char *line;
+	char *next;
 	int ch;
-	int row;
 	int col;
-	int rows;
 	int cols;
+	int len;
+	int cap;
+	int size;
 
 	screen = newterm(NULL, stdout, stdin);
 	if (screen == NULL)
 		return "cannot initialize terminal";
 	error = NULL;
-	row = 0;
+	line = NULL;
+	len = 0;
+	cap = 0;
 	col = 0;
 	if (raw() == ERR || noecho() == ERR || keypad(stdscr, TRUE) == ERR ||
 	    erase() == ERR || refresh() == ERR) {
@@ -30,31 +37,43 @@ const char *screen_run(void)
 				error = "cannot read input";
 				break;
 			}
-			getmaxyx(stdscr, rows, cols);
+			cols = getmaxx(stdscr);
 			switch (ch) {
-			case KEY_UP:
-				if (row > 0)
-					--row;
-				break;
-			case KEY_DOWN:
-				if (row < rows - 1)
-					++row;
-				break;
 			case KEY_LEFT:
 				if (col > 0)
 					--col;
 				break;
 			case KEY_RIGHT:
-				if (col < cols - 1)
+				if (col < len && col < cols - 1)
 					++col;
 				break;
+			default:
+				if (ch < ' ' || ch > '~' || len >= cols - 1)
+					break;
+				if (len + 1 >= cap) {
+					size = cap == 0 ? cols :
+						(cap > cols / 2 ? cols : cap * 2);
+					next = realloc(line, size);
+					if (next == NULL) {
+						error = "cannot allocate line";
+						break;
+					}
+					line = next;
+					cap = size;
+				}
+				memmove(line + col + 1, line + col, len - col);
+				line[col++] = ch;
+				line[++len] = '\0';
+				break;
 			}
-			if (row >= rows)
-				row = rows - 1;
+			if (error != NULL)
+				break;
 			if (col >= cols)
 				col = cols - 1;
-			if (move(row, col) == ERR || refresh() == ERR) {
-				error = "cannot position cursor";
+			if (erase() == ERR ||
+			    (len > 0 && addnstr(line, cols - 1) == ERR) ||
+			    move(0, col) == ERR || refresh() == ERR) {
+				error = "cannot draw line";
 				break;
 			}
 		}
@@ -62,5 +81,6 @@ const char *screen_run(void)
 	if (endwin() == ERR)
 		error = "cannot restore terminal";
 	delscreen(screen);
+	free(line);
 	return error;
 }
